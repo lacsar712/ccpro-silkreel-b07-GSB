@@ -1,11 +1,18 @@
 from quart import Quart, g, jsonify, request
 from quart.helpers import make_response
+from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
 from app.models import Basin
-from app.repositories import BasinRepo, UserRepo
+from app.repositories import BasinRepo, CounterRepo, UserRepo
 from app.security import make_token, parse_token, verify_password
-from app.services import RuleError, assert_can_set_status, latest_temp
+from app.services import (
+    RuleError,
+    assert_can_set_status,
+    latest_temp,
+    next_round_on_enter_reeling,
+    server_day_window,
+)
 
 app = Quart(__name__)
 
@@ -121,13 +128,36 @@ async def set_status(basin_id: int):
     status = (body or {}).get("status", "")
     async with SessionLocal() as session:
         repo = BasinRepo(session)
-        basin = await repo.get(basin_id)
+        # 行锁串行化同一口盆的改态，配合事件表部分唯一索引：
+        # 两名工交叉把同一口缫丝中盆标成已缫完，只许一笔成功。
+        basin = await repo.get_for_update(basin_id)
         if basin is None:
             return jsonify({"detail": "盆不存在"}), 404
         try:
             assert_can_set_status(basin, status)
         except RuleError as exc:
             return jsonify({"detail": str(exc)}), 400
-        await repo.save_status(basin, status)
+        bump = next_round_on_enter_reeling(basin, status)
+        try:
+            await repo.change_status(basin, status, g.user.username, bump)
+        except IntegrityError:
+            # 同一轮已有一笔成功的「已缫完」（并发抢标落败者）
+            return jsonify({"detail": "该盆本轮已标过已缫完，只计一次"}), 409
         basin = await repo.get(basin_id)
         return _basin_json(basin)
+
+
+@app.route("/api/counters/reeled-today")
+async def reeled_today_counter():
+    """已缫完次数台：今日（服务器自然日）成功改态成已缫完的笔数。
+
+    只点成功改态事件，不随盆现状变动——改回缫丝中不会减，
+    历史上早已缫完的盆也不充数。
+    """
+    denied = require_user()
+    if denied:
+        return denied
+    start_utc, end_utc, day = server_day_window()
+    async with SessionLocal() as session:
+        count = await CounterRepo(session).reeled_success_count(start_utc, end_utc)
+    return {"date": day, "reeledCount": count}

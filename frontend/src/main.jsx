@@ -44,7 +44,34 @@ function Login({ onOk }) {
   );
 }
 
-function Yard() {
+function TopBar({ view, onNav }) {
+  return (
+    <div class="topbar">
+      <nav class="navtabs">
+        <button class={view === "yard" ? "navtab active" : "navtab"} onClick={() => onNav("yard")}>
+          环盆作业台
+        </button>
+        <button
+          class={view === "counter" ? "navtab active" : "navtab"}
+          onClick={() => onNav("counter")}
+        >
+          已缫完次数台
+        </button>
+      </nav>
+      <button
+        class="logout"
+        onClick={() => {
+          clearToken();
+          location.reload();
+        }}
+      >
+        退出
+      </button>
+    </div>
+  );
+}
+
+function Yard({ onNav }) {
   const [board, setBoard] = useState(null);
   const [picked, setPicked] = useState(null);
   const [temp, setTemp] = useState("40");
@@ -65,6 +92,7 @@ function Yard() {
   if (!board) {
     return (
       <div class="yard">
+        <TopBar view="yard" onNav={onNav} />
         {err || "装载环盆…"}
       </div>
     );
@@ -100,19 +128,10 @@ function Yard() {
 
   return (
     <div class="yard">
-      <div class="topbar">
-        <div>
-          <h1>{board.filature}</h1>
-          <p>{board.riverside} · 点盆登记汤温；已缫完须最近汤温 38～42℃</p>
-        </div>
-        <button
-          onClick={() => {
-            clearToken();
-            location.reload();
-          }}
-        >
-          退出
-        </button>
+      <TopBar view="yard" onNav={onNav} />
+      <div class="subtitle">
+        <h1>{board.filature}</h1>
+        <p>{board.riverside} · 点盆登记汤温；已缫完须最近汤温 38～42℃</p>
       </div>
       <div class="ring">
         {board.basins.map((b, i) => {
@@ -152,9 +171,54 @@ function Yard() {
   );
 }
 
+function ReeledCounter({ onNav }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+
+  async function refresh() {
+    setErr("");
+    try {
+      setData(await api("/api/counters/reeled-today"));
+    } catch (ex) {
+      setErr(ex.message);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div class="counter-page">
+      <TopBar view="counter" onNav={onNav} />
+      <div class="counter-card">
+        <h1>已缫完次数台</h1>
+        <p class="counter-date">服务器自然日 · {data ? data.date : "—"}</p>
+        <div class="counter-number">{data ? data.reeledCount : "—"}</div>
+        <p class="counter-note">
+          今日成功把盆态改成「已缫完」的次数。一口盆同一轮缫丝只计一次；
+          本页只读，不能改态、不能登记汤温。
+        </p>
+        <button onClick={refresh}>刷新</button>
+        {err && <p class="err">{err}</p>}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [ready, setReady] = useState(Boolean(token()));
-  return ready ? <Yard /> : <Login onOk={() => setReady(true)} />;
+  const [view, setView] = useState("yard");
+  if (!ready) {
+    return <Login onOk={() => setReady(true)} />;
+  }
+  return view === "counter" ? (
+    <ReeledCounter onNav={setView} />
+  ) : (
+    <Yard onNav={setView} />
+  );
 }
 
 render(<App />, document.getElementById("app"));
