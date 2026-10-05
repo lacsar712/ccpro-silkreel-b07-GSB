@@ -2,8 +2,8 @@ from quart import Quart, g, jsonify, request
 from quart.helpers import make_response
 
 from app.db import SessionLocal
-from app.models import Basin
-from app.repositories import BasinRepo, UserRepo
+from app.models import Basin, server_today
+from app.repositories import BasinRepo, ReeledEventRepo, UserRepo
 from app.security import make_token, parse_token, verify_password
 from app.services import RuleError, assert_can_set_status, latest_temp
 
@@ -128,6 +128,36 @@ async def set_status(basin_id: int):
             assert_can_set_status(basin, status)
         except RuleError as exc:
             return jsonify({"detail": str(exc)}), 400
-        await repo.save_status(basin, status)
+        if status == Basin.STATUS_REELED:
+            # 原子改态 + 同事务记流水；两人交叉标同一盆只许一笔成功
+            ok = await repo.mark_reeled_once(basin, g.user.username)
+            if not ok:
+                return jsonify({"detail": "该盆已是已缫完，不能重复标定"}), 409
+        else:
+            await repo.save_status(basin, status)
         basin = await repo.get(basin_id)
         return _basin_json(basin)
+
+
+@app.route("/api/reeled-count/today")
+async def reeled_count_today():
+    """已缫完次数台：只统计今天（服务器自然日）成功改成已缫完的次数。"""
+    denied = require_user()
+    if denied:
+        return denied
+    today = server_today()
+    async with SessionLocal() as session:
+        repo = ReeledEventRepo(session)
+        rows = await repo.day_rows(today)
+        return {
+            "day": today.isoformat(),
+            "count": len(rows),
+            "events": [
+                {
+                    "basinCode": code,
+                    "operator": event.operator,
+                    "happenedAt": event.happened_at.isoformat() if event.happened_at else None,
+                }
+                for event, code in rows
+            ],
+        }

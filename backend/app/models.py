@@ -1,11 +1,16 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def server_today() -> date:
+    """服务器自然日（应用服务器本地日期）。"""
+    return date.today()
 
 
 class Base(DeclarativeBase):
@@ -57,3 +62,16 @@ class BathReading(Base):
     water_temp_c: Mapped[float] = mapped_column(Float)
     operator: Mapped[str] = mapped_column(String(64), default="")
     basin: Mapped[Basin] = relationship(back_populates="readings")
+
+
+class ReeledEvent(Base):
+    """一次「成功改成已缫完」的流水，与改态同一事务写入；次数台按服务器自然日统计它。"""
+
+    __tablename__ = "reeled_events"
+    __table_args__ = (Index("ix_reeled_events_day", "day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    basin_id: Mapped[int] = mapped_column(ForeignKey("basins.id"))
+    operator: Mapped[str] = mapped_column(String(64), default="")
+    happened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    day: Mapped[date] = mapped_column(Date, default=server_today)

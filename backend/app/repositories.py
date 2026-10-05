@@ -1,8 +1,10 @@
-from sqlalchemy import select
+from datetime import date
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Basin, BathReading, Filature, User
+from app.models import Basin, BathReading, Filature, ReeledEvent, User
 
 
 class UserRepo:
@@ -44,3 +46,37 @@ class BasinRepo:
     async def save_status(self, basin: Basin, status: str) -> None:
         basin.status = status
         await self.session.commit()
+
+    async def mark_reeled_once(self, basin: Basin, operator: str) -> bool:
+        """把盆原子地标成已缫完，并在同一事务里记一笔流水。
+
+        并发下只有一笔 UPDATE 能命中「尚未已缫完」的行：赢家提交后，
+        输家的 WHERE 重新求值命中 0 行，回滚返回 False，次数台不多计。
+        """
+        result = await self.session.execute(
+            update(Basin)
+            .where(Basin.id == basin.id, Basin.status != Basin.STATUS_REELED)
+            .values(status=Basin.STATUS_REELED)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await self.session.rollback()
+            return False
+        self.session.add(ReeledEvent(basin_id=basin.id, operator=operator))
+        await self.session.commit()
+        self.session.expire(basin)
+        return True
+
+
+class ReeledEventRepo:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def day_rows(self, day: date) -> list[tuple[ReeledEvent, str]]:
+        result = await self.session.execute(
+            select(ReeledEvent, Basin.code)
+            .join(Basin, ReeledEvent.basin_id == Basin.id)
+            .where(ReeledEvent.day == day)
+            .order_by(ReeledEvent.id.desc())
+        )
+        return list(result.all())

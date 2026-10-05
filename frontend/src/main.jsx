@@ -44,7 +44,34 @@ function Login({ onOk }) {
   );
 }
 
-function Yard() {
+function TopBar({ page, onNav, title, sub }) {
+  return (
+    <div class="topbar">
+      <div>
+        <h1>{title}</h1>
+        <p>{sub}</p>
+        <nav class="tabs">
+          <button class={page === "yard" ? "on" : ""} onClick={() => onNav("yard")}>
+            环盆作业台
+          </button>
+          <button class={page === "count" ? "on" : ""} onClick={() => onNav("count")}>
+            已缫完次数台
+          </button>
+        </nav>
+      </div>
+      <button
+        onClick={() => {
+          clearToken();
+          location.reload();
+        }}
+      >
+        退出
+      </button>
+    </div>
+  );
+}
+
+function Yard({ onNav }) {
   const [board, setBoard] = useState(null);
   const [picked, setPicked] = useState(null);
   const [temp, setTemp] = useState("40");
@@ -100,20 +127,12 @@ function Yard() {
 
   return (
     <div class="yard">
-      <div class="topbar">
-        <div>
-          <h1>{board.filature}</h1>
-          <p>{board.riverside} · 点盆登记汤温；已缫完须最近汤温 38～42℃</p>
-        </div>
-        <button
-          onClick={() => {
-            clearToken();
-            location.reload();
-          }}
-        >
-          退出
-        </button>
-      </div>
+      <TopBar
+        page="yard"
+        onNav={onNav}
+        title={board.filature}
+        sub={`${board.riverside} · 点盆登记汤温；已缫完须最近汤温 38～42℃`}
+      />
       <div class="ring">
         {board.basins.map((b, i) => {
           const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
@@ -152,9 +171,77 @@ function Yard() {
   );
 }
 
+function ReeledCount({ onNav }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+
+  async function load() {
+    try {
+      setData(await api("/api/reeled-count/today"));
+      setErr("");
+    } catch (ex) {
+      setErr(ex.message);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div class="yard">
+      <TopBar
+        page="count"
+        onNav={onNav}
+        title="已缫完次数台"
+        sub="只统计今天（服务器自然日）成功把盆态改成已缫完的次数"
+      />
+      {err && <p class="err">{err}</p>}
+      {!data ? (
+        <p>装载次数台…</p>
+      ) : (
+        <div>
+          <div class="countcard">
+            <div class="bignum">{data.count}</div>
+            <p>今日 {data.day} 成功标定已缫完次数</p>
+          </div>
+          <button onClick={load}>刷新</button>
+          {data.events.length > 0 && (
+            <table class="events">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>盆位</th>
+                  <th>工人</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.events.map((ev, i) => (
+                  <tr key={i}>
+                    <td>{ev.happenedAt ? new Date(ev.happenedAt).toLocaleString() : "—"}</td>
+                    <td>{ev.basinCode}</td>
+                    <td>{ev.operator}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p class="hint">本页只读：不能改盆态、不能登记汤温；改态请去「环盆作业台」。</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [ready, setReady] = useState(Boolean(token()));
-  return ready ? <Yard /> : <Login onOk={() => setReady(true)} />;
+  const [page, setPage] = useState("yard");
+  if (!ready) {
+    return <Login onOk={() => setReady(true)} />;
+  }
+  return page === "count" ? <ReeledCount onNav={setPage} /> : <Yard onNav={setPage} />;
 }
 
 render(<App />, document.getElementById("app"));
